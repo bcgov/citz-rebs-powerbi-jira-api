@@ -104,26 +104,27 @@ while (total_results > progress) {
     select(
       IssueKeyNumber = id,
       IssueKey = key,
+      Priority,
+      Assignee,
+      Resolved,
+      Frequency,
+      `Initial Target Date`,
+      `Request Type`,
       Summary,
       `Issue Type`,
-      Project,
       Priority,
       Assignee,
       Reporter,
       Creator,
       Created,
-      Resolved,
       Description,
       `RPD Branch`,
       `Comms Plan Required?`,
       `Communication Lead`,
       `Communication Topic`,
-      Frequency,
-      `Initial Target Date`,
-      `Request Type`,
-      `Topic of Communication`,
-      `Status Category Changed`,
-      Updated
+      `Topic of Communication` #,
+      # `Status Category Changed`,
+      # Updated
     ) |>
     # begin retrieving values of interest and flattening list columns
     # Assignee ####
@@ -142,9 +143,6 @@ while (total_results > progress) {
       CommunicationLead = "displayName",
       .remove = FALSE
     ) |>
-    # Communication LeadId
-    safe_hoist(`Communication Lead`, CommunicationLeadID = "accountId") |>
-    select(-c(`Communication Lead`)) |>
     # Communication Topic
     safe_hoist(
       `Topic of Communication`,
@@ -165,8 +163,6 @@ while (total_results > progress) {
       .remove = FALSE
     ) |>
     select(-c(Description)) |>
-    # Due date - removed
-    # Event Date - not pulled
     # Frequency
     safe_hoist(
       Frequency,
@@ -181,7 +177,6 @@ while (total_results > progress) {
         format = "%Y-%m-%d"
       )
     ) |>
-    # Issue key - is already in data as key and renamed at start
     # Issue Type
     safe_hoist(
       `Issue Type`,
@@ -198,26 +193,11 @@ while (total_results > progress) {
     # Request Type
     safe_hoist(`Request Type`, RequestType = list("requestType", "name")) |>
     select(-c(`Request Type`)) |>
-    # Resolution
-    # safe_hoist(Resolution, Resolution_name = "description", .remove = FALSE) |>
     # Resolved - single date value, format as date
     mutate(Resolved = as.Date(Resolved, format = "%Y-%m-%d")) |>
     # RPD Branch
     safe_hoist(`RPD Branch`, RPD_Branch = "value", .remove = FALSE) |>
     select(-c(`RPD Branch`)) |>
-    # Project key
-    safe_hoist(
-      Project,
-      ProjectKey = list("projectTypeKey", 1L),
-      .remove = FALSE
-    ) |>
-    select(-c(Project)) |>
-    # Status Category - what is different here from status name??
-    # check$Status
-    # Status Category Changed - fine as is single date value
-    # Summary - seems to be a single character string, fine as is
-    # Updated - format as date
-    mutate(Updated = as.Date(Updated, format = "%Y-%m-%d")) |>
     # start cleaning up the columns
     select(-c(where(is.list))) |>
     select_all(~ gsub("_name|_text|_val|_value", "", .)) |>
@@ -254,9 +234,10 @@ while (total_results > progress) {
     ) |>
     group_by(IssueKeyNumber) |>
     mutate(rownumber = row_number()) |>
+    ungroup() |>
     mutate(
       Value = case_when(
-        rownumber == 1 & is.na(aud_val) ~ "",
+        rownumber == 1 & is.na(aud_val) ~ "Blank",
         rownumber == 1 & !is.na(aud_val) ~ aud_val,
         rownumber != 1 & !is.na(aud_val) ~ aud_val,
         .default = NA
@@ -285,9 +266,10 @@ while (total_results > progress) {
     ) |>
     group_by(IssueKeyNumber) |>
     mutate(rownumber = row_number()) |>
+    ungroup() |>
     mutate(
       Value = case_when(
-        rownumber == 1 & is.na(aud_val) ~ "",
+        rownumber == 1 & is.na(aud_val) ~ "Blank",
         rownumber == 1 & !is.na(aud_val) ~ aud_val,
         rownumber != 1 & !is.na(aud_val) ~ aud_val,
         .default = NA
@@ -319,9 +301,10 @@ while (total_results > progress) {
     ) |>
     group_by(IssueKeyNumber) |>
     mutate(rownumber = row_number()) |>
+    ungroup() |>
     mutate(
       Value = case_when(
-        rownumber == 1 & is.na(aud_val) ~ "",
+        rownumber == 1 & is.na(aud_val) ~ "Blank",
         rownumber == 1 & !is.na(aud_val) ~ aud_val,
         rownumber != 1 & !is.na(aud_val) ~ aud_val,
         .default = NA
@@ -351,16 +334,20 @@ while (total_results > progress) {
     ) |>
     group_by(IssueKeyNumber) |>
     mutate(rownumber = row_number()) |>
+    ungroup() |>
     mutate(
       Value = case_when(
-        rownumber == 1 & is.na(aud_val) ~ "",
+        rownumber == 1 & is.na(aud_val) ~ "Blank",
         rownumber == 1 & !is.na(aud_val) ~ aud_val,
         rownumber != 1 & !is.na(aud_val) ~ aud_val,
         .default = NA
       )
     ) |>
     select(-c(aud_names, aud_val, rownumber)) |>
-    filter(!is.na(Value))
+    filter(!is.na(Value)) |>
+    mutate(count = 1) |>
+    pivot_wider(names_from = Value, values_from = count) |>
+    mutate(across(everything(), ~ replace_na(.x, 0)))
 
   ticketStatus <- step_one |>
     # Rename custom fields
@@ -471,3 +458,15 @@ while (total_results > progress) {
   progress <- progress + max_results
   start_at <- progress + 1
 }
+
+rm(
+  list = c(
+    'additionalContributors',
+    'branchOrGroup',
+    'intendedAudiences',
+    'issueDimension',
+    'step_one',
+    'tactics',
+    'ticketStatus'
+  )
+)
