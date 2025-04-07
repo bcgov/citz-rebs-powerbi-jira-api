@@ -26,7 +26,7 @@ api_key <- read.csv("C:/Projects/credentials/jira_api_token.csv") |> pull()
 token <- base64encode(charToRaw(paste0(email, ":", api_key)))
 token_string <- paste("Basic", token)
 
-# Setup API retrieving all issues/tickets from dashboard
+# Setup API parameters ####
 query_url = "https://citz-rpd.atlassian.net/rest/api/3/"
 project_id = "search?jql=project=COM&expand=changelog,names"
 max_results = 100
@@ -259,13 +259,12 @@ while (total_results > progress) {
     select(-c(aud_names, aud_val, rownumber)) |>
     filter(!is.na(Value)) |>
     mutate(count = 1) |>
-    pivot_wider(names_from = Value, values_from = count) |>
-    mutate(across(everything(), ~ replace_na(.x, 0)))
-
+    pivot_wider(names_from = Value, values_from = count)
   if (start_at == 1) {
     Tactics <- tactics
   } else {
-    Tactics <- full_join(Tactics, tactics)
+    Tactics <- full_join(Tactics, tactics) |>
+      mutate(across(everything(), ~ replace_na(.x, 0)))
   }
   progress <- progress + max_results
   start_at <- progress + 1
@@ -350,13 +349,13 @@ while (total_results > progress) {
       id_cols = IssueKeyNumber,
       names_from = Value,
       values_from = count
-    ) |>
-    mutate(across(everything(), ~ replace_na(.x, 0)))
+    )
 
   if (start_at == 1) {
     IntendedAudiences <- intendedAudiences
   } else {
-    IntendedAudiences <- full_join(IntendedAudiences, intendedAudiences)
+    IntendedAudiences <- full_join(IntendedAudiences, intendedAudiences) |>
+      mutate(across(everything(), ~ replace_na(.x, 0)))
   }
   progress <- progress + max_results
   start_at <- progress + 1
