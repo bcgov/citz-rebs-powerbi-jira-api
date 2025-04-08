@@ -21,41 +21,21 @@ safe_hoist <- function(.data, .col, ...) {
   }
 }
 
-# Setup variables needed for API calls
-# https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/
-# API key will need to be generated on the Jira website
-# Eventual goal will be to have the token and email associated with a service account
-# For the M query version will omit email and api_key and put the encoded token directly in
 email <- read.csv("C:/Projects/credentials/email_address.csv") |> pull()
 api_key <- read.csv("C:/Projects/credentials/jira_api_token.csv") |> pull()
 token <- base64encode(charToRaw(paste0(email, ":", api_key)))
 token_string <- paste("Basic", token)
-query_url = "https://citz-rpd.atlassian.net/rest/api/3/field"
 
-# Query API to get the names for custom fields
-req <- request(query_url) |>
-  req_headers(Authorization = token_string) |>
-  req_perform()
-
-# fields is used to overwrite custom field columns with actual column name in subsequent queries
-fields <- req |>
-  resp_body_json() |>
-  tibble::enframe() |>
-  tidyr::unnest_wider(value, names_sep = "_") |>
-  select(id = value_id, name = value_name) |>
-  add_row(id = "changelog", name = "changelog")
-
-# Setup API retrieving all issues/tickets from dashboard
+# Setup API parameters ####
 query_url = "https://citz-rpd.atlassian.net/rest/api/3/"
-project_id = "search?jql=project=COM&expand=changelog"
+project_id = "search?jql=project=COM&expand=changelog,names"
 max_results = 100
 start_at = 1
 total_results = 25
 progress = 0
 
-# Loop query to get all issues in a dashboard
+# Issues Loop ####
 while (total_results > progress) {
-  print(paste0("StartAt: ", start_at))
   req <- request(query_url) |>
     req_headers(Authorization = token_string) |>
     # configure project, max_results, and start_at
@@ -69,37 +49,31 @@ while (total_results > progress) {
     req_perform()
 
   resp <- req |> resp_body_json()
+
   # Used to update total_results in while loop
-  total_results <- resp["total"]
+  total_results <- resp["total"][[1]]
 
-  # Start unnesting returned json before customfield renaming
-  step_one <- resp |>
-    purrr::pluck("issues") |>
+  names <- resp |>
+    purrr::pluck("names") |>
     tibble::enframe() |>
-    tidyr::unnest_wider(value) |>
-    tidyr::unnest_wider(fields)
-
-  # Setup values to rename custom fields
-  colnames <- step_one |>
-    select(-c(1:5)) |>
-    colnames() |>
-    tibble::enframe() |>
-    select(-name) |>
-    left_join(fields, by = join_by(value == id)) |>
-    group_by(name) |>
+    safe_hoist(value, Value = 1L) |>
+    group_by(Value) |>
     mutate(row_name = row_number(), row_count = n()) |>
     mutate(
-      name = case_when(
-        row_count > 1 ~ paste0(name, "-", row_name),
-        .default = name
+      Value = case_when(
+        row_count > 1 ~ paste0(Value, "-", row_name),
+        .default = Value
       )
     ) |>
     select(-c(row_name, row_count)) |>
     tibble::deframe()
 
-  issueDimension <- step_one |>
-    # Rename custom fields
-    plyr::rename(colnames) |>
+  issues <- resp |>
+    purrr::pluck("issues") |>
+    tibble::enframe() |>
+    tidyr::unnest_wider(value) |>
+    tidyr::unnest_wider(fields) |>
+    plyr::rename(names) |>
     # Select fields of interest
     select(
       IssueKeyNumber = id,
@@ -122,7 +96,8 @@ while (total_results > progress) {
       `Comms Plan Required?`,
       `Communication Lead`,
       `Communication Topic`,
-      `Topic of Communication` #,
+      `Topic of Communication`,
+      Status #,
       # `Status Category Changed`,
       # Updated
     ) |>
@@ -172,7 +147,7 @@ while (total_results > progress) {
     select(-c(Frequency)) |>
     # Initial Target Date - convert to date format
     mutate(
-      InitialTargetDate = as.Date(
+      `Initial Target Date` = as.Date(
         `Initial Target Date`,
         format = "%Y-%m-%d"
       )
@@ -198,130 +173,68 @@ while (total_results > progress) {
     # RPD Branch
     safe_hoist(`RPD Branch`, RPD_Branch = "value", .remove = FALSE) |>
     select(-c(`RPD Branch`)) |>
+    # Status
+    safe_hoist(Status, Status_val = "name", .remove = FALSE) |>
+    select(-c(Status)) |>
     # start cleaning up the columns
     select(-c(where(is.list))) |>
     select_all(~ gsub("_name|_text|_val|_value", "", .)) |>
     select_all(~ gsub("_", " ", .))
+  if (start_at == 1) {
+    Issues <- issues
+  } else {
+    Issues <- full_join(Issues, issues)
+  }
+  progress <- progress + max_results
+  start_at <- progress + 1
+}
 
-  additionalContributors <- step_one |>
-    # Rename custom fields
-    plyr::rename(colnames) |>
-    # Select fields of interest
-    select(
-      IssueKeyNumber = id,
-      `Additional Contributors (SMEs)`
-    ) |>
-    # Additional Contributors ####
-    safe_hoist(
-      `Additional Contributors (SMEs)`,
-      Additional_Contributors_SMEs = list("content", 1L, "content"),
-      .remove = FALSE
-    ) |>
-    unnest_wider(Additional_Contributors_SMEs, names_sep = "_") |>
-    unnest_wider(
-      starts_with("Additional_Contributors_SMEs"),
-      names_sep = "_"
-    ) |>
-    select(
-      -c(starts_with("Additional_Contributors_SMEs") & !ends_with("text"))
-    ) |>
-    select(-c(`Additional Contributors (SMEs)`)) |>
-    # Clean up Additional Contributors (column numbers are weird)
-    pivot_longer(
-      cols = starts_with("Additional_Contributors"),
-      names_to = "aud_names",
-      values_to = "aud_val"
-    ) |>
-    group_by(IssueKeyNumber) |>
-    mutate(rownumber = row_number()) |>
-    ungroup() |>
+# Tactics Loop ####
+while (total_results > progress) {
+  req <- request(query_url) |>
+    req_headers(Authorization = token_string) |>
+    # configure project, max_results, and start_at
+    req_url_path_append(paste0(
+      project_id,
+      "&maxResults=",
+      max_results,
+      "&startAt=",
+      start_at
+    )) |>
+    req_perform()
+
+  resp <- req |> resp_body_json()
+
+  # Used to update total_results in while loop
+  total_results <- resp["total"][[1]]
+
+  names <- resp |>
+    purrr::pluck("names") |>
+    tibble::enframe() |>
+    safe_hoist(value, Value = 1L) |>
+    group_by(Value) |>
+    mutate(row_name = row_number(), row_count = n()) |>
     mutate(
       Value = case_when(
-        rownumber == 1 & is.na(aud_val) ~ "Blank",
-        rownumber == 1 & !is.na(aud_val) ~ aud_val,
-        rownumber != 1 & !is.na(aud_val) ~ aud_val,
-        .default = NA
+        row_count > 1 ~ paste0(Value, "-", row_name),
+        .default = Value
       )
     ) |>
-    select(-c(aud_names, aud_val, rownumber)) |>
-    filter(!is.na(Value))
+    select(-c(row_name, row_count)) |>
+    tibble::deframe()
 
-  branchOrGroup <- step_one |>
+  tactics <- resp |>
+    purrr::pluck("issues") |>
+    tibble::enframe() |>
+    tidyr::unnest_wider(value) |>
+    tidyr::unnest_wider(fields) |>
     # Rename custom fields
-    plyr::rename(colnames) |>
-    # Select fields of interest
-    select(
-      IssueKeyNumber = id,
-      `Branch or Group`
-    ) |>
-    # begin retrieving values of interest and flattening list columns
-    # Branch or Group ####
-    unnest_wider(`Branch or Group`, names_sep = "_") |>
-    unnest_wider(starts_with("Branch or Group"), names_sep = "_") |>
-    select(-c(starts_with("Branch or Group") & !ends_with("value"))) |>
-    pivot_longer(
-      cols = starts_with("Branch or Group"),
-      names_to = "aud_names",
-      values_to = "aud_val"
-    ) |>
-    group_by(IssueKeyNumber) |>
-    mutate(rownumber = row_number()) |>
-    ungroup() |>
-    mutate(
-      Value = case_when(
-        rownumber == 1 & is.na(aud_val) ~ "Blank",
-        rownumber == 1 & !is.na(aud_val) ~ aud_val,
-        rownumber != 1 & !is.na(aud_val) ~ aud_val,
-        .default = NA
-      )
-    ) |>
-    select(-c(aud_names, aud_val, rownumber)) |>
-    filter(!is.na(Value))
-
-  intendedAudiences <- step_one |>
-    # Rename custom fields
-    plyr::rename(colnames) |>
-    # Select fields of interest
-    select(
-      IssueKeyNumber = id,
-      `Intended audiences`,
-      `Intended Audience(s)`
-    ) |>
-    # Intended Audiences ####
-    unnest_wider(starts_with("Intended Audience"), names_sep = "_") |>
-    unnest_wider(starts_with("Intended Audience"), names_sep = "_") |>
-    select(
-      -c(starts_with("Intended Audience") & !ends_with("value"))
-    ) |>
-    # Clean up Intended Audience(s) (the column numbering is bad after filtering)
-    pivot_longer(
-      cols = starts_with("Intended Audience"),
-      names_to = "aud_names",
-      values_to = "aud_val"
-    ) |>
-    group_by(IssueKeyNumber) |>
-    mutate(rownumber = row_number()) |>
-    ungroup() |>
-    mutate(
-      Value = case_when(
-        rownumber == 1 & is.na(aud_val) ~ "Blank",
-        rownumber == 1 & !is.na(aud_val) ~ aud_val,
-        rownumber != 1 & !is.na(aud_val) ~ aud_val,
-        .default = NA
-      )
-    ) |>
-    select(-c(aud_names, aud_val, rownumber)) |>
-    filter(!is.na(Value))
-
-  tactics <- step_one |>
-    # Rename custom fields
-    plyr::rename(colnames) |>
+    plyr::rename(names) |>
     # Select fields of interest
     select(
       IssueKeyNumber = id,
       Tactics
     ) |>
-    # Tactics ####
     unnest_wider(starts_with("Tactics"), names_sep = "_") |>
     unnest_wider(starts_with("Tactics"), names_sep = "_") |>
     select(
@@ -346,127 +259,104 @@ while (total_results > progress) {
     select(-c(aud_names, aud_val, rownumber)) |>
     filter(!is.na(Value)) |>
     mutate(count = 1) |>
-    pivot_wider(names_from = Value, values_from = count) |>
-    mutate(across(everything(), ~ replace_na(.x, 0)))
-
-  ticketStatus <- step_one |>
-    # Rename custom fields
-    plyr::rename(colnames) |>
-    # Select fields of interest
-    select(
-      IssueKeyNumber = id,
-      changelog,
-      changelog_historiesFirstcreated = Created
-    ) |>
-    # changelog ####
-    safe_hoist(
-      changelog,
-      changelog_histories = list("histories"),
-      .remove = FALSE
-    ) |>
-    unnest_wider(changelog_histories, names_sep = "_") |>
-    unnest_wider(contains("changelog_histories_"), names_sep = "_") |>
-    select(
-      -c(
-        starts_with("changelog_histories") &
-          !ends_with("items") &
-          !ends_with("created")
-      )
-    ) |>
-    unnest_wider(contains("items"), names_sep = "_") |>
-    unnest_wider(contains("items_"), names_sep = "_") |>
-    select(-changelog) |>
-    pivot_longer(
-      cols = contains("changelog_histories"),
-      names_to = "column_name",
-      values_to = "column_value"
-    ) |>
-    filter(!is.na(column_value)) |>
-    # match first number in name string
-    mutate(
-      col_number = stringr::str_extract(column_name, "[0-9]+"),
-      col_first_type = stringr::str_extract(
-        column_name,
-        "([0-9]+_)([a-z]+)",
-        group = 2
-      ),
-      sub_col_number = stringr::str_extract(
-        column_name,
-        "([0-9]+_[a-z]+_)([0-9]+)",
-        group = 2
-      ),
-      col_second_type = stringr::str_extract(
-        column_name,
-        "([0-9]+_[a-z]+_[0-9]+_)([a-zA-Z]+)",
-        group = 2
-      )
-    ) |>
-    mutate(
-      col_number = case_when(!is.na(col_number) ~ col_number, .default = "0")
-    ) |>
-    group_by(IssueKeyNumber, col_number) |>
-    filter(any(column_value == 'status') | col_number == 0) |>
-    group_by(IssueKeyNumber, col_number, sub_col_number) |>
-    filter(all(!column_value == 'resolution')) |>
-    filter(col_second_type %in% c('toString', NA)) |>
-    mutate(
-      col_name = case_when(
-        col_number == 0 ~ 'Created',
-        col_number != 0 & !is.na(col_second_type) ~ col_second_type,
-        col_number != 0 & is.na(col_second_type) ~ 'TimeStamp'
-      )
-    ) |>
-    ungroup() |>
-    select(-c(column_name, col_first_type, sub_col_number, col_second_type)) |>
-    relocate(col_name, column_value, col_number, .after = IssueKeyNumber) |>
-    pivot_wider(
-      names_from = col_name,
-      values_from = column_value
-    ) |>
-    mutate(
-      TimeStamp = case_when(
-        !is.na(Created) ~ Created,
-        is.na(Created) ~ TimeStamp
-      ),
-      Value = case_when(!is.na(toString) ~ toString, .default = "Open")
-    ) |>
-    select(-c(col_number, toString, Created)) |>
-    mutate(
-      TimeStamp = ymd_hms(TimeStamp)
-    ) |>
-    arrange(IssueKeyNumber, TimeStamp)
-
+    pivot_wider(names_from = Value, values_from = count)
   if (start_at == 1) {
-    Issues <- issueDimension
-    AdditionalContributors <- additionalContributors
-    BranchOrGroup <- branchOrGroup
-    IntendedAudiences <- intendedAudiences
-    Status <- ticketStatus
     Tactics <- tactics
   } else {
-    Issues <- full_join(Issues, issueDimension)
-    AdditionalContributors <- full_join(
-      AdditionalContributors,
-      additionalContributors
-    )
-    BranchOrGroup <- full_join(BranchOrGroup, branchOrGroup)
-    IntendedAudiences <- full_join(IntendedAudiences, intendedAudiences)
-    Status <- full_join(Status, ticketStatus)
-    Tactics <- full_join(Tactics, tactics)
+    Tactics <- full_join(Tactics, tactics) |>
+      mutate(across(everything(), ~ replace_na(.x, 0)))
   }
-
   progress <- progress + max_results
   start_at <- progress + 1
 }
 
-rm(
-  list = c(
-    'additionalContributors',
-    'branchOrGroup',
-    'intendedAudiences',
-    'issueDimension',
-    'step_one',
-    'tactics',
-    'ticketStatus'
-  )
-)
+# IntendedAudiences Loop ####
+while (total_results > progress) {
+  req <- request(query_url) |>
+    req_headers(Authorization = token_string) |>
+    # configure project, max_results, and start_at
+    req_url_path_append(paste0(
+      project_id,
+      "&maxResults=",
+      max_results,
+      "&startAt=",
+      start_at
+    )) |>
+    req_perform()
+
+  resp <- req |> resp_body_json()
+
+  # Used to update total_results in while loop
+  total_results <- resp["total"][[1]]
+
+  names <- resp |>
+    purrr::pluck("names") |>
+    tibble::enframe() |>
+    safe_hoist(value, Value = 1L) |>
+    group_by(Value) |>
+    mutate(row_name = row_number(), row_count = n()) |>
+    mutate(
+      Value = case_when(
+        row_count > 1 ~ paste0(Value, "-", row_name),
+        .default = Value
+      )
+    ) |>
+    select(-c(row_name, row_count)) |>
+    tibble::deframe()
+
+  intendedAudiences <- resp |>
+    purrr::pluck("issues") |>
+    tibble::enframe() |>
+    tidyr::unnest_wider(value) |>
+    tidyr::unnest_wider(fields) |>
+    # Rename custom fields
+    plyr::rename(names) |>
+    select(
+      IssueKeyNumber = id,
+      `Intended audiences`,
+      `Intended Audience(s)`
+    ) |>
+    unnest_wider(starts_with("Intended Audience"), names_sep = "_") |>
+    unnest_wider(starts_with("Intended Audience"), names_sep = "_") |>
+    select(
+      -c(starts_with("Intended Audience") & !ends_with("value"))
+    ) |>
+    # Clean up Intended Audience(s) (the column numbering is bad after filtering)
+    pivot_longer(
+      cols = starts_with("Intended Audience"),
+      names_to = "aud_names",
+      values_to = "aud_val"
+    ) |>
+    group_by(IssueKeyNumber) |>
+    mutate(rownumber = row_number()) |>
+    ungroup() |>
+    mutate(
+      Value = case_when(
+        rownumber == 1 & is.na(aud_val) ~ "Blank",
+        rownumber == 1 & !is.na(aud_val) ~ aud_val,
+        rownumber != 1 & !is.na(aud_val) ~ aud_val,
+        .default = NA
+      )
+    ) |>
+
+    select(-c(aud_names, aud_val, rownumber)) |>
+    filter(!is.na(Value)) |>
+    # For some reason duplicate values
+    distinct() |>
+    ungroup() |>
+    mutate(count = 1) |>
+    pivot_wider(
+      id_cols = IssueKeyNumber,
+      names_from = Value,
+      values_from = count
+    )
+
+  if (start_at == 1) {
+    IntendedAudiences <- intendedAudiences
+  } else {
+    IntendedAudiences <- full_join(IntendedAudiences, intendedAudiences) |>
+      mutate(across(everything(), ~ replace_na(.x, 0)))
+  }
+  progress <- progress + max_results
+  start_at <- progress + 1
+}
