@@ -35,92 +35,173 @@ total_results = 25
 progress = 0
 
 # Issues Loop ####
-# while (total_results > progress) {
-req <- request(query_url) |>
-  req_headers(Authorization = token_string) |>
-  # configure project, max_results, and start_at
-  req_url_path_append(paste0(
-    project_id,
-    "&maxResults=",
-    max_results,
-    "&startAt=",
-    start_at
-  )) |>
-  req_perform()
+while (total_results > progress) {
+  req <- request(query_url) |>
+    req_headers(Authorization = token_string) |>
+    # configure project, max_results, and start_at
+    req_url_path_append(paste0(
+      project_id,
+      "&maxResults=",
+      max_results,
+      "&startAt=",
+      start_at
+    )) |>
+    req_perform()
 
-resp <- req |> resp_body_json()
+  resp <- req |> resp_body_json()
 
-# Used to update total_results in while loop
-total_results <- resp["total"][[1]]
+  # Used to update total_results in while loop
+  total_results <- resp["total"][[1]]
 
-names <- resp |>
-  purrr::pluck("names") |>
-  tibble::enframe() |>
-  safe_hoist(value, Value = 1L) |>
-  group_by(Value) |>
-  mutate(row_name = row_number(), row_count = n()) |>
-  mutate(
-    Value = case_when(
-      row_count > 1 ~ paste0(Value, "-", row_name),
-      .default = Value
+  names <- resp |>
+    purrr::pluck("names") |>
+    tibble::enframe() |>
+    safe_hoist(value, Value = 1L) |>
+    group_by(Value) |>
+    mutate(row_name = row_number(), row_count = n()) |>
+    mutate(
+      Value = case_when(
+        row_count > 1 ~ paste0(Value, "-", row_name),
+        .default = Value
+      )
+    ) |>
+    select(-c(row_name, row_count)) |>
+    tibble::deframe()
+
+  issues <- resp |>
+    purrr::pluck("issues") |>
+    tibble::enframe() |>
+    tidyr::unnest_wider(value) |>
+    tidyr::unnest_wider(fields) |>
+    plyr::rename(names) |>
+    select(
+      IssueID = id,
+      IssueKey = key,
+      Changelog = changelog,
+      Organization = `Ministry/BPS Organization`,
+      ProjectEffectiveDate = `Project Effective Date`,
+      StatusCategory = `Status Category`,
+      Resolution,
+      Assignee,
+      TimeToResolution = `Time to resolution`,
+      TimeToFirstResponse = `Time to first response`,
+      Reporter,
+      Urgency,
+      RequestLanguage = `Request language`,
+      Progress,
+      IssueType = `Issue Type`,
+      Project,
+      RequestParticipants = `Request participants`,
+      Resolved,
+      Updated,
+      Description,
+      RequestType = `Request Type`,
+      Summary,
+      StatusCategoryChanged = `Status Category Changed`,
+      PrimaryUse = `Primary Use`,
+      BuildingNumber = `Building Number`,
+      Priority,
+      Status,
+      Creator,
+      TotalProgress = `Σ Progress`,
+      Created,
+      Tenure,
+      ServiceProvider = `Service Provider`,
+      PropertyDescription = `Description of Property`,
+      Area,
+      LeaseNumber = `Lease Number`,
+      UnitAddress = `Suite or Unit Address`,
+      Floors = `Floors/Rooms`,
+      BuildingType = `Building Type`,
+      City = `City-2`,
+      Address
+    ) |>
+    safe_hoist(Organization, Organization = "value", .remove = FALSE) |>
+    safe_hoist(StatusCategory, StatusCategory = "name", .remove = FALSE) |>
+    safe_hoist(Status, Status = "name", .remove = FALSE) |>
+    safe_hoist(Resolution, Resolution = "name", .remove = FALSE) |>
+    safe_hoist(Assignee, Assignee = "displayName", .remove = FALSE) |>
+    safe_hoist(Reporter, Reporter = "displayName", .remove = FALSE) |>
+    safe_hoist(IssueType, IssueType = "name", .remove = FALSE) |>
+    safe_hoist(
+      RequestType,
+      RequestType = list("requestType", "name"),
+      .remove = FALSE
+    ) |>
+    # safe_hoist(
+    #   Description,
+    #   Description2 = list("content", 1L, "content", 1L, "text"),
+    #   .remove = FALSE
+    # )
+    mutate(
+      ProjectEffectiveDate = as.Date(ProjectEffectiveDate, format = "%Y-%m-%d")
+    ) |>
+    mutate(
+      Resolved = as.POSIXct(
+        Resolved,
+        tz = Sys.timezone()
+      )
+    ) |>
+    mutate(
+      Created = as.POSIXct(
+        Created,
+        tz = Sys.timezone()
+      )
+    ) |>
+    mutate(
+      Updated = as.POSIXct(
+        Updated,
+        tz = Sys.timezone()
+      )
+    ) |>
+    mutate(
+      StatusCategoryChanged = as.POSIXct(
+        StatusCategoryChanged,
+        tz = Sys.timezone()
+      )
+    ) |>
+    # mutate(Created = parse_date_time(Created, "%Y-%m-%d %H:%M")) |>
+    # mutate(Updated = parse_date_time(Updated, "%Y-%m-%d %H:%M")) |>
+    # mutate(
+    #   StatusCategoryChanged = parse_date_time(
+    #     StatusCategoryChanged,
+    #     "%Y-%m-%d %H:%M"
+    #   )
+    # ) |>
+    select(
+      # Shed what seems like excess for now
+      -c(
+        Changelog,
+        TimeToResolution,
+        TimeToFirstResponse,
+        Urgency,
+        RequestLanguage,
+        Progress,
+        Project,
+        RequestParticipants,
+        Description,
+        PrimaryUse,
+        Creator,
+        TotalProgress,
+        BuildingNumber,
+        Priority,
+        Tenure,
+        ServiceProvider,
+        PropertyDescription,
+        Area,
+        LeaseNumber,
+        UnitAddress,
+        Floors,
+        BuildingType,
+        City,
+        Address
+      )
     )
-  ) |>
-  select(-c(row_name, row_count)) |>
-  tibble::deframe()
-
-issues <- resp |>
-  purrr::pluck("issues") |>
-  tibble::enframe() |>
-  tidyr::unnest_wider(value) |>
-  tidyr::unnest_wider(fields) |>
-  plyr::rename(names) |>
-  select(
-    IssueID = id,
-    IssueKey = key,
-    Changelog = changelog,
-    Organization = `Ministry/BPS Organization`,
-    ProjectEffectiveDate = `Project Effective Date`,
-    StatusCategory = `Status Category`,
-    Resolution,
-    Assignee,
-    TimeToResolution = `Time to resolution`,
-    TimeToFirstResponse = `Time to first response`,
-    Reporter,
-    Urgency,
-    RequestLanguage = `Request language`,
-    Progress,
-    IssueType = `Issue Type`,
-    Project,
-    RequestParticipants = `Request participants`,
-    Resolved,
-    Updated,
-    Description,
-    RequestType = `Request Type`,
-    Summary,
-    StatusCategoryChanged = `Status Category Changed`,
-    PrimaryUse = `Primary Use`,
-    BuildingNumber = `Building Number`,
-    Priority,
-    Status,
-    Creator,
-    TotalProgress = `Σ Progress`,
-    Created,
-    Tenure,
-    ServiceProvider = `Service Provider`,
-    PropertyDescription = `Description of Property`,
-    Area,
-    LeaseNumber = `Lease Number`,
-    UnitAddress = `Suite or Unit Address`,
-    Floors = `Floors/Rooms`,
-    BuildingType = `Building Type`,
-    City = `City-2`,
-    Address
-  )
-#   if (start_at == 1) {
-#     Issues <- issues
-#   } else {
-#     Issues <- full_join(Issues, issues)
-#   }
-#   progress <- progress + max_results
-#   start_at <- progress + 1
-# }
+  if (start_at == 1) {
+    Issues <- issues
+  } else {
+    Issues <- full_join(Issues, issues)
+  }
+  progress <- progress + max_results
+  start_at <- progress + 1
+}
