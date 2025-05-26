@@ -1,3 +1,6 @@
+# Folders to Ignore
+/PBI
+
 # History files
 .Rhistory
 .Rapp.history
