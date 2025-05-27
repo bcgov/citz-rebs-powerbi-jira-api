@@ -79,7 +79,6 @@ while (total_results > progress) {
     select(
       IssueID = id,
       IssueKey = key,
-      Changelog = changelog,
       ProjectEffectiveDate,
       Created,
       Resolved,
@@ -114,7 +113,32 @@ while (total_results > progress) {
         !is.na(Resolved) ~
           ((as.duration(interval(Created, Resolved))@.Data) / 60) / 60
       )
+    ) |>
+    mutate(
+      Resolved = as.POSIXct(
+        Resolved,
+        tz = Sys.timezone()
+      )
+    ) |>
+    mutate(
+      Created = as.POSIXct(
+        Created,
+        tz = Sys.timezone()
+      )
+    ) |>
+    mutate(
+      Updated = as.POSIXct(
+        Updated,
+        tz = Sys.timezone()
+      )
+    ) |>
+    mutate(
+      StatusCategoryChanged = as.POSIXct(
+        StatusCategoryChanged,
+        tz = Sys.timezone()
+      )
     )
+
   if (start_at == 1) {
     Issues <- issues
   } else {
