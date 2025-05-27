@@ -74,47 +74,25 @@ while (total_results > progress) {
     tidyr::unnest_wider(value) |>
     tidyr::unnest_wider(fields) |>
     plyr::rename(names) |>
+    # select_if(~ !all(is.na(.))) |>
+    rename_with(~ gsub(" ", "", .)) |>
     select(
       IssueID = id,
       IssueKey = key,
       Changelog = changelog,
-      Organization = `Ministry/BPS Organization`,
-      ProjectEffectiveDate = `Project Effective Date`,
-      StatusCategory = `Status Category`,
-      Resolution,
-      Assignee,
-      TimeToResolution = `Time to resolution`,
-      TimeToFirstResponse = `Time to first response`,
-      Reporter,
-      Urgency,
-      RequestLanguage = `Request language`,
-      Progress,
-      IssueType = `Issue Type`,
-      Project,
-      RequestParticipants = `Request participants`,
+      ProjectEffectiveDate,
+      Created,
       Resolved,
       Updated,
-      Description,
-      RequestType = `Request Type`,
-      Summary,
-      StatusCategoryChanged = `Status Category Changed`,
-      PrimaryUse = `Primary Use`,
-      BuildingNumber = `Building Number`,
-      Priority,
+      Organization = `Ministry/BPSOrganization`,
+      RequestType,
       Status,
-      Creator,
-      TotalProgress = `Σ Progress`,
-      Created,
-      Tenure,
-      ServiceProvider = `Service Provider`,
-      PropertyDescription = `Description of Property`,
-      Area,
-      LeaseNumber = `Lease Number`,
-      UnitAddress = `Suite or Unit Address`,
-      Floors = `Floors/Rooms`,
-      BuildingType = `Building Type`,
-      City = `City-2`,
-      Address
+      StatusCategory,
+      StatusCategoryChanged,
+      Assignee,
+      Reporter,
+      Resolution,
+      Summary
     ) |>
     safe_hoist(Organization, Organization = "value", .remove = FALSE) |>
     safe_hoist(StatusCategory, StatusCategory = "name", .remove = FALSE) |>
@@ -122,79 +100,19 @@ while (total_results > progress) {
     safe_hoist(Resolution, Resolution = "name", .remove = FALSE) |>
     safe_hoist(Assignee, Assignee = "displayName", .remove = FALSE) |>
     safe_hoist(Reporter, Reporter = "displayName", .remove = FALSE) |>
-    safe_hoist(IssueType, IssueType = "name", .remove = FALSE) |>
     safe_hoist(
       RequestType,
       RequestType = list("requestType", "name"),
       .remove = FALSE
     ) |>
-    # safe_hoist(
-    #   Description,
-    #   Description2 = list("content", 1L, "content", 1L, "text"),
-    #   .remove = FALSE
-    # )
     mutate(
       ProjectEffectiveDate = as.Date(ProjectEffectiveDate, format = "%Y-%m-%d")
     ) |>
     mutate(
-      Resolved = as.POSIXct(
-        Resolved,
-        tz = Sys.timezone()
-      )
-    ) |>
-    mutate(
-      Created = as.POSIXct(
-        Created,
-        tz = Sys.timezone()
-      )
-    ) |>
-    mutate(
-      Updated = as.POSIXct(
-        Updated,
-        tz = Sys.timezone()
-      )
-    ) |>
-    mutate(
-      StatusCategoryChanged = as.POSIXct(
-        StatusCategoryChanged,
-        tz = Sys.timezone()
-      )
-    ) |>
-    # mutate(Created = parse_date_time(Created, "%Y-%m-%d %H:%M")) |>
-    # mutate(Updated = parse_date_time(Updated, "%Y-%m-%d %H:%M")) |>
-    # mutate(
-    #   StatusCategoryChanged = parse_date_time(
-    #     StatusCategoryChanged,
-    #     "%Y-%m-%d %H:%M"
-    #   )
-    # ) |>
-    select(
-      # Shed what seems like excess for now
-      -c(
-        Changelog,
-        TimeToResolution,
-        TimeToFirstResponse,
-        Urgency,
-        RequestLanguage,
-        Progress,
-        Project,
-        RequestParticipants,
-        Description,
-        PrimaryUse,
-        Creator,
-        TotalProgress,
-        BuildingNumber,
-        Priority,
-        Tenure,
-        ServiceProvider,
-        PropertyDescription,
-        Area,
-        LeaseNumber,
-        UnitAddress,
-        Floors,
-        BuildingType,
-        City,
-        Address
+      TimeToCompletion = case_when(
+        is.na(Resolved) ~ NA,
+        !is.na(Resolved) ~
+          ((as.duration(interval(Created, Resolved))@.Data) / 60) / 60
       )
     )
   if (start_at == 1) {
