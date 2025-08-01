@@ -190,6 +190,11 @@ while (total_results > progress) {
 }
 
 # Tactics Loop ####
+max_results = 100
+start_at = 1
+total_results = 25
+progress = 0
+
 while (total_results > progress) {
   req <- request(query_url) |>
     req_headers(Authorization = token_string) |>
@@ -271,6 +276,10 @@ while (total_results > progress) {
 }
 
 # IntendedAudiences Loop ####
+max_results = 100
+start_at = 1
+total_results = 25
+progress = 0
 while (total_results > progress) {
   req <- request(query_url) |>
     req_headers(Authorization = token_string) |>
@@ -360,3 +369,8 @@ while (total_results > progress) {
   progress <- progress + max_results
   start_at <- progress + 1
 }
+
+Example <- IntendedAudiences |>
+  rowwise() |>
+  mutate(Count = sum(c_across(`All RPD Employees`:Other))) |>
+  ungroup()

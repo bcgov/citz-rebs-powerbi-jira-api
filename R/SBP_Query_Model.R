@@ -1,6 +1,5 @@
 # Load necessary packages
 library(base64enc, quietly = TRUE, warn.conflicts = FALSE)
-library(plyr, quietly = TRUE, warn.conflicts = FALSE)
 library(dplyr, quietly = TRUE, warn.conflicts = FALSE)
 library(httr2, quietly = TRUE, warn.conflicts = FALSE)
 library(jsonlite, quietly = TRUE, warn.conflicts = FALSE)
@@ -9,17 +8,7 @@ library(purrr, quietly = TRUE, warn.conflicts = FALSE)
 library(tibble, quietly = TRUE, warn.conflicts = FALSE)
 library(tidyr, quietly = TRUE, warn.conflicts = FALSE)
 
-# Will need this function later for extracting values from list columns
-safe_hoist <- function(.data, .col, ...) {
-  .col <- tidyselect::vars_pull(names(.data), {{ .col }})
-  if (is.list(.data[[.col]])) {
-    hoist(.data, .col, ...)
-  } else {
-    dot_args <- list(...)
-    dot_args <- dot_args[setdiff(names(dot_args), names(formals(hoist)))]
-    mutate(.data, !!!replace(dot_args, TRUE, NA))
-  }
-}
+source(here::here("R/utilities.R"))
 
 email <- read.csv("C:/Projects/credentials/email_address.csv") |> pull()
 api_key <- read.csv("C:/Projects/credentials/jira_api_token.csv") |> pull()
@@ -28,7 +17,7 @@ token_string <- paste("Basic", token)
 
 # Setup API parameters ####
 query_url = "https://citz-rpd.atlassian.net/rest/api/3/"
-project_id = "search?jql=project=PAR&expand=changelog,names"
+project_id = "search?jql=project=SBP&expand=changelog,names"
 max_results = 100
 start_at = 1
 total_results = 25
@@ -46,8 +35,6 @@ while (total_results > progress) {
       "&startAt=",
       start_at
     )) |>
-    # required for server forward proxy
-    # req_proxy("142.34.229.249", 8080) |>
     req_perform()
 
   resp <- req |> resp_body_json()
@@ -76,70 +63,65 @@ while (total_results > progress) {
     tidyr::unnest_wider(value) |>
     tidyr::unnest_wider(fields) |>
     plyr::rename(names) |>
-    # select_if(~ !all(is.na(.))) |>
-    rename_with(~ gsub(" ", "", .)) |>
-    select(
-      IssueID = id,
-      IssueKey = key,
-      ProjectEffectiveDate,
-      Created,
-      Resolved,
-      Updated,
-      Organization = `Ministry/BPSOrganization`,
-      RequestType,
-      Status,
-      StatusCategory,
-      StatusCategoryChanged,
-      Assignee,
-      Reporter,
-      Resolution,
-      Summary
+    # Parent column is sometimes missing as sparsely populated
+    mutate(
+      Parent = if ("Parent" %in% names(pick(everything()))) Parent else NA
     ) |>
-    safe_hoist(Organization, Organization = "value", .remove = FALSE) |>
-    safe_hoist(StatusCategory, StatusCategory = "name", .remove = FALSE) |>
-    safe_hoist(Status, Status = "name", .remove = FALSE) |>
-    safe_hoist(Resolution, Resolution = "name", .remove = FALSE) |>
+    # Select fields of interest
+    select(
+      IssueKey = key,
+      IssueType = `Issue Type`,
+      Address,
+      Assignee,
+      Created,
+      RequestedDueDate = `Requested Due Date`,
+      SpaceBookingAdmin = `Name of Space Booking Admin`,
+      NumberOfSpaces = `Number of Spaces to Onboard`,
+      FloorPlan = `Do you have a floor plan?`,
+      FurniturePlan = `Do you have a furniture plan?`,
+      LastUpdatedStatus = `Last Updated Status`,
+      Department = `Department-1`,
+      DueDate = `Due date`,
+      Organization = `Ministry/BPS Organization`,
+      Priority,
+      Reporter,
+      RequestParticipants = `Request participants`,
+      RequestType = `Request Type`,
+      Resolved,
+      Status,
+      Summary,
+      Updated,
+      Parent
+    ) |>
+    safe_hoist(IssueType, IssueType = "name", .remove = FALSE) |>
+    safe_hoist(
+      Address,
+      Address = list("content", 1L, "content", 1L, "text"),
+      .remove = FALSE
+    ) |>
     safe_hoist(Assignee, Assignee = "displayName", .remove = FALSE) |>
+    safe_hoist(RequestedDueDate, RequestedDueDate = "value", .remove = FALSE) |>
+    safe_hoist(FloorPlan, FloorPlan = "value", .remove = FALSE) |>
+    safe_hoist(FurniturePlan, FurniturePlan = "value", .remove = FALSE) |>
+    safe_hoist(Organization, Organization = "value", .remove = FALSE) |>
+    safe_hoist(Priority, Priority = "name", .remove = FALSE) |>
     safe_hoist(Reporter, Reporter = "displayName", .remove = FALSE) |>
+    safe_hoist_all(
+      RequestParticipants,
+      path = list("displayName"),
+      .remove = FALSE
+    ) |>
+    mutate(
+      RequestParticipants = RequestParticipants_displayName,
+      .keep = "unused"
+    ) |>
     safe_hoist(
       RequestType,
       RequestType = list("requestType", "name"),
       .remove = FALSE
     ) |>
-    mutate(
-      ProjectEffectiveDate = as.Date(ProjectEffectiveDate, format = "%Y-%m-%d")
-    ) |>
-    mutate(
-      TimeToCompletion = case_when(
-        is.na(Resolved) ~ NA,
-        !is.na(Resolved) ~
-          ((as.duration(interval(Created, Resolved))@.Data) / 60) / 60
-      )
-    ) |>
-    mutate(
-      Resolved = as.POSIXct(
-        Resolved,
-        tz = Sys.timezone()
-      )
-    ) |>
-    mutate(
-      Created = as.POSIXct(
-        Created,
-        tz = Sys.timezone()
-      )
-    ) |>
-    mutate(
-      Updated = as.POSIXct(
-        Updated,
-        tz = Sys.timezone()
-      )
-    ) |>
-    mutate(
-      StatusCategoryChanged = as.POSIXct(
-        StatusCategoryChanged,
-        tz = Sys.timezone()
-      )
-    )
+    safe_hoist(Status, Status = "name", .remove = FALSE) |>
+    safe_hoist(Parent, Parent = "key", .remove = FALSE)
 
   if (start_at == 1) {
     Issues <- issues
@@ -149,3 +131,5 @@ while (total_results > progress) {
   progress <- progress + max_results
   start_at <- progress + 1
 }
+
+# write.csv(Issues, here::here("SBP_output.csv"))
