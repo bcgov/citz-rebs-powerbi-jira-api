@@ -16,8 +16,9 @@ token <- base64encode(charToRaw(paste0(email, ":", api_key)))
 token_string <- paste("Basic", token)
 
 # Setup API parameters ####
-query_url = "https://citz-rpd.atlassian.net/rest/api/3/"
-project_id = "search?jql=project=SBP&expand=changelog,names"
+query_url = "https://citz-rpd.atlassian.net/rest/api/3/search"
+project_id = "SBP"
+expand_opts = c("changelog", "names")
 max_results = 100
 start_at = 1
 total_results = 25
@@ -28,13 +29,13 @@ while (total_results > progress) {
   req <- request(query_url) |>
     req_headers(Authorization = token_string) |>
     # configure project, max_results, and start_at
-    req_url_path_append(paste0(
-      project_id,
-      "&maxResults=",
-      max_results,
-      "&startAt=",
-      start_at
-    )) |>
+    req_url_query(
+      jql = I(paste0("project=", project_id)), # I wrapper skips auto-formatting of the extra "=" sign
+      expand = expand_opts,
+      maxResults = max_results,
+      startAt = start_at,
+      .multi = "comma" # control how vectors are appended, for expand_opts
+    ) |>
     req_perform()
 
   resp <- req |> resp_body_json()
@@ -87,11 +88,13 @@ while (total_results > progress) {
       Reporter,
       RequestParticipants = `Request participants`,
       RequestType = `Request Type`,
+      # StatusCategoryChanged = `Status Category Changed`,
       Resolved,
       Status,
       Summary,
       Updated,
-      Parent
+      Parent,
+      changelog
     ) |>
     safe_hoist(IssueType, IssueType = "name", .remove = FALSE) |>
     safe_hoist(
@@ -132,4 +135,87 @@ while (total_results > progress) {
   start_at <- progress + 1
 }
 
+timestamp <- format(Sys.time(), format = "%Y-%m-%dT%H:%M:%OS3%z")
+
+StatusChange <- Issues |>
+  select(IssueKey, Status, TicketCreated = Created, changelog) |>
+  safe_hoist(changelog, histories = list("histories"), .remove = FALSE) |>
+  select(-c(changelog)) |>
+  unnest_longer(col = histories, values_to = "values") |>
+  unnest_longer(col = values, values_to = "values", indices_to = "column") |>
+  filter(column %in% c("created", "items")) |>
+  pivot_wider(names_from = column, values_from = values, values_fn = list) |>
+  unnest_longer(col = created:items) |>
+  select(-c(created_id, items_id)) |>
+  unnest_longer(items) |>
+  safe_hoist(
+    items,
+    item_field = list("field"),
+    .remove = FALSE
+  ) |>
+  safe_hoist(
+    items,
+    item_fromString = list("fromString"),
+    .remove = FALSE
+  ) |>
+  safe_hoist(
+    items,
+    item_toString = list("toString"),
+    .remove = FALSE
+  ) |>
+  group_by(IssueKey) |>
+  mutate(rowNum = row_number()) |>
+  mutate(
+    created = case_when(
+      !any(item_field == "status") & rowNum == 1 ~ timestamp,
+      .default = created
+    ),
+    item_toString = case_when(
+      !any(item_field == "status") & rowNum == 1 ~ "No-Change",
+      .default = item_toString
+    ),
+    item_fromString = case_when(
+      !any(item_field == "status") & rowNum == 1 ~ "Open",
+      .default = item_fromString
+    ),
+    item_field = case_when(
+      !any(item_field == "status") & rowNum == 1 ~ "status",
+      .default = item_field
+    )
+  ) |>
+  ungroup() |>
+  filter(item_field == "status") |>
+  select(-c(items, rowNum)) |>
+  mutate(
+    TicketCreated = ymd_hms(TicketCreated),
+    created = ymd_hms(created)
+  ) |>
+  arrange(IssueKey, created) |>
+  group_by(IssueKey) |>
+  mutate(
+    TimeElapsed = as.numeric(difftime(
+      created,
+      lag(created, n = 1, default = first(TicketCreated)),
+      units = "days"
+    ))
+  ) |>
+  ungroup() |>
+  select(-c(item_toString, item_field, created, Status, TicketCreated)) |>
+  group_by(IssueKey, item_fromString) |>
+  summarise(TimeElapsed = sum(TimeElapsed, na.rm = TRUE)) |>
+  pivot_wider(names_from = item_fromString, values_from = TimeElapsed) |>
+  ungroup() |>
+  rename_with(~ gsub(" ", "", .x), where(is.numeric))
+
+Issues <- Issues |>
+  left_join(StatusChange, by = join_by(IssueKey)) |>
+  select(-changelog)
+
 # write.csv(Issues, here::here("SBP_output.csv"))
+
+# test <- issues |>
+#   # select(where(is.list)) |>
+#   safe_hoist(Status, Status = "name", .remove = FALSE) |>
+#   filter(Status == "Closed") |>
+#   select(key, Status, StatusCategoryChanged = `Status Category Changed`, TimeToResolution = `Time to resolution`) |>
+#   safe_hoist(TimeToResolution, TimeToResolution = list("completedCycles"), .remove = FALSE)
