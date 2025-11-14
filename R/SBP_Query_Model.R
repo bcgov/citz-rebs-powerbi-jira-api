@@ -8,10 +8,23 @@ library(purrr, quietly = TRUE, warn.conflicts = FALSE)
 library(tibble, quietly = TRUE, warn.conflicts = FALSE)
 library(tidyr, quietly = TRUE, warn.conflicts = FALSE)
 
+# Server Run
+# source("E:/Projects/citz-rebs-jira-api/utilities.R")
+
+# Local Run
 source(here::here("R/utilities.R"))
 
+# Update email/api_key as needed
+# Server Run
+# email <- read.csv("E:/Projects/credentials/service_email_address.csv") |> pull()
+# api_key <- read.csv("E:/Projects/credentials/jira_api_service_token.csv") |>
+#   pull()
+
+# Local Run
 email <- read.csv("C:/Projects/credentials/email_address.csv") |> pull()
 api_key <- read.csv("C:/Projects/credentials/jira_api_token.csv") |> pull()
+
+# Encode token
 token <- base64encode(charToRaw(paste0(email, ":", api_key)))
 token_string <- paste("Basic", token)
 
@@ -33,15 +46,27 @@ while (total_results > progress) {
       jql = I(paste0("project=", project_id)), # I wrapper skips auto-formatting of the extra "=" sign
       expand = expand_opts,
       maxResults = max_results,
-      startAt = start_at,
+      fields = "*all",
+      # startAt = start_at, #deprecated for nextPageToken
+      nextPageToken = nextPageToken,
       .multi = "comma" # control how vectors are appended, for expand_opts
     ) |>
+    # req_proxy("142.34.229.249", 8080) |> # Use Server Proxy to connect
     req_perform()
 
   resp <- req |> resp_body_json()
 
   # Used to update total_results in while loop
-  total_results <- resp["total"][[1]]
+  nextPageToken <- resp["nextPageToken"][[1]]
+
+  # total results isn't always accurate, check that response has issues
+  if (length(resp$issues) == 0) {
+    break
+  }
+
+  if (is.null(nextPageToken)) {
+    progress <- 2
+  }
 
   names <- resp |>
     purrr::pluck("names") |>
@@ -88,7 +113,6 @@ while (total_results > progress) {
       Reporter,
       RequestParticipants = `Request participants`,
       RequestType = `Request Type`,
-      # StatusCategoryChanged = `Status Category Changed`,
       Resolved,
       Status,
       Summary,
@@ -126,15 +150,17 @@ while (total_results > progress) {
     safe_hoist(Status, Status = "name", .remove = FALSE) |>
     safe_hoist(Parent, Parent = "key", .remove = FALSE)
 
-  if (start_at == 1) {
+  if (round == 1) {
     Issues <- issues
   } else {
     Issues <- full_join(Issues, issues)
   }
-  progress <- progress + max_results
-  start_at <- progress + 1
+
+  round <- 2
 }
 
+# Calculate time spent in status for each ticket.
+# timestamp is used for tickets that have only been open, calc time from creation to sys.time for total elapsed time.
 timestamp <- format(Sys.time(), format = "%Y-%m-%dT%H:%M:%OS3%z")
 
 StatusChange <- Issues |>
@@ -201,21 +227,23 @@ StatusChange <- Issues |>
   ) |>
   ungroup() |>
   select(-c(item_toString, item_field, created, Status, TicketCreated)) |>
+  mutate(
+    item_fromString = gsub(" ", "", tools::toTitleCase(item_fromString))
+  ) |> # deal with variable capitalization
   group_by(IssueKey, item_fromString) |>
   summarise(TimeElapsed = sum(TimeElapsed, na.rm = TRUE)) |>
   pivot_wider(names_from = item_fromString, values_from = TimeElapsed) |>
-  ungroup() |>
-  rename_with(~ gsub(" ", "", .x), where(is.numeric))
+  ungroup()
 
+# Deal with issues where extra newline characters screwed up the read in of data to power bi
 Issues <- Issues |>
+  mutate(across(where(is.character), ~ gsub(",", "", .x))) |>
+  mutate(across(where(is.character), ~ trimws(.x))) |>
   left_join(StatusChange, by = join_by(IssueKey)) |>
   select(-changelog)
 
-# write.csv(Issues, here::here("SBP_output.csv"))
+# Server Save
+# write.csv(Issues, "E:/Projects/PBI-Gateway/SBP_Issues.csv", row.names = FALSE)
 
-# test <- issues |>
-#   # select(where(is.list)) |>
-#   safe_hoist(Status, Status = "name", .remove = FALSE) |>
-#   filter(Status == "Closed") |>
-#   select(key, Status, StatusCategoryChanged = `Status Category Changed`, TimeToResolution = `Time to resolution`) |>
-#   safe_hoist(TimeToResolution, TimeToResolution = list("completedCycles"), .remove = FALSE)
+# Local Save
+write.csv(Issues, here::here("SBP_output.csv"))

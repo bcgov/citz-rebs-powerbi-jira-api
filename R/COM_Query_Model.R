@@ -1,6 +1,5 @@
 # Load necessary packages
 library(base64enc, quietly = TRUE, warn.conflicts = FALSE)
-library(plyr, quietly = TRUE, warn.conflicts = FALSE)
 library(dplyr, quietly = TRUE, warn.conflicts = FALSE)
 library(httr2, quietly = TRUE, warn.conflicts = FALSE)
 library(jsonlite, quietly = TRUE, warn.conflicts = FALSE)

@@ -31,9 +31,8 @@ token_string <- paste("Basic", token)
 # Setup API parameters ####
 query_url = "https://citz-rpd.atlassian.net/rest/api/3/search/jql"
 # https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-jql-get
-# https://developer.atlassian.com/changelog/#CHANGE-2046
-project_id = "PAR"
-expand_opts = c("names", "fields")
+project_id = "RBAS"
+expand_opts = c("changelog", "names", "fields")
 max_results = 100
 nextPageToken = NULL
 total_results = 1
@@ -71,6 +70,7 @@ while (total_results > progress) {
     progress <- 2
   }
 
+  # pull the names attribute and prep to rename the issue columns.
   names <- resp |>
     purrr::pluck("names") |>
     tibble::enframe() |>
@@ -86,75 +86,78 @@ while (total_results > progress) {
     select(-c(row_name, row_count)) |>
     tibble::deframe()
 
+  # pull rows of issues, rename, unnest columns and format.
   issues <- resp |>
     purrr::pluck("issues") |>
     tibble::enframe() |>
     tidyr::unnest_wider(value) |>
     tidyr::unnest_wider(fields) |>
     plyr::rename(names) |>
-    # select_if(~ !all(is.na(.))) |>
     rename_with(~ gsub(" ", "", .)) |>
     select(
       IssueID = id,
       IssueKey = key,
-      ProjectEffectiveDate,
       Created,
-      Resolved,
+      EndDate,
+      RequestedDueDate,
+      Duedate,
       Updated,
+      Resolved,
+      Resolution,
+      TimeToResolution = Timetoresolution,
+      ServiceRequested,
+      ProjectType,
       Organization = `Ministry/BPSOrganization`,
+      BranchDivision = `Branch/Division`,
+      RPDBranch,
+      MYSCReq = `MYSCReq#`,
       RequestType,
+      RequestSubtype,
+      Casetype,
       Status,
       StatusCategory,
       StatusCategoryChanged,
       Assignee,
+      EmployeeID,
       Reporter,
-      Resolution,
       Summary
     ) |>
-    safe_hoist(Organization, Organization = "value", .remove = FALSE) |>
-    safe_hoist(StatusCategory, StatusCategory = "name", .remove = FALSE) |>
-    safe_hoist(Status, Status = "name", .remove = FALSE) |>
     safe_hoist(Resolution, Resolution = "name", .remove = FALSE) |>
-    safe_hoist(Assignee, Assignee = "displayName", .remove = FALSE) |>
-    safe_hoist(Reporter, Reporter = "displayName", .remove = FALSE) |>
+    safe_hoist(
+      TimeToResolution,
+      TimeToResolution = list("ongoingCycle", "elapsedTime", "millis"),
+      .remove = FALSE
+    ) |>
+    safe_hoist(RPDBranch, RPDBranch = "value", .remove = FALSE) |>
     safe_hoist(
       RequestType,
       RequestType = list("requestType", "name"),
       .remove = FALSE
     ) |>
-    mutate(
-      ProjectEffectiveDate = as.Date(ProjectEffectiveDate, format = "%Y-%m-%d")
-    ) |>
-    mutate(
-      TimeToCompletion = case_when(
-        is.na(Resolved) ~ NA,
-        !is.na(Resolved) ~
-          ((as.duration(interval(Created, Resolved))@.Data) / 60) / 60
-      )
-    ) |>
-    mutate(
-      Resolved = as.POSIXct(
-        Resolved,
-        tz = Sys.timezone()
-      )
-    ) |>
+    safe_hoist(Status, Status = "name", .remove = FALSE) |>
+    safe_hoist(StatusCategory, StatusCategory = "name", .remove = FALSE) |>
+    safe_hoist(Assignee, Assignee = "displayName", .remove = FALSE) |>
+    safe_hoist(Reporter, Reporter = "displayName", .remove = FALSE) |>
+    safe_hoist(Organization, Organization = "value", .remove = FALSE) |>
+    safe_hoist(RequestedDueDate, RequestedDueDate = "value", .remove = FALSE) |>
     mutate(
       Created = as.POSIXct(
         Created,
         tz = Sys.timezone()
-      )
-    ) |>
-    mutate(
+      ),
       Updated = as.POSIXct(
         Updated,
         tz = Sys.timezone()
-      )
-    ) |>
-    mutate(
+      ),
       StatusCategoryChanged = as.POSIXct(
         StatusCategoryChanged,
         tz = Sys.timezone()
       )
+    ) |>
+    mutate(
+      MinutesToResolution = (TimeToResolution / 1000) / 60,
+      .keep = "unused",
+      .after = Resolution
     )
 
   if (round == 1) {
@@ -166,12 +169,14 @@ while (total_results > progress) {
   round <- 2
 }
 
-# Replace NA values with NaN, think this plays better with PBI
 Issues <- Issues %>%
-  replace_na(replace = list(TimeToCompletion = NaN))
+  # Add a filter step to remove all the test tickets prior to launch on Aug 18th 2025
+  filter(
+    !IssueKey %in% c("RBAS-1", "RBAS-2", "RBAS-3", "RBAS-4", "RBAS-5", "RBAS-6")
+  )
 
 # Server Save
-# write.csv(Issues, "E:/Projects/PBI-Gateway/PAR_Issues.csv", row.names = FALSE)
+# write.csv(Issues, "E:/Projects/PBI-Gateway/RBAS_Issues.csv", row.names = FALSE)
 
 # Local Save
-write.csv(Issues, here::here("PAR_output.csv"))
+write.csv(Issues, here::here("RBAS_output.csv"))

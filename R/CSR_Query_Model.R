@@ -1,6 +1,5 @@
 # Load necessary packages
 library(base64enc, quietly = TRUE, warn.conflicts = FALSE)
-library(plyr, quietly = TRUE, warn.conflicts = FALSE)
 library(dplyr, quietly = TRUE, warn.conflicts = FALSE)
 library(httr2, quietly = TRUE, warn.conflicts = FALSE)
 library(jsonlite, quietly = TRUE, warn.conflicts = FALSE)
@@ -27,31 +26,47 @@ token <- base64encode(charToRaw(paste0(email, ":", api_key)))
 token_string <- paste("Basic", token)
 
 # Setup API parameters ####
-query_url = "https://citz-rpd.atlassian.net/rest/api/3/"
-project_id = "search?jql=project=CSR&expand=changelog,names"
+query_url = "https://citz-rpd.atlassian.net/rest/api/3/search/jql"
+# https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-jql-get
+# https://developer.atlassian.com/changelog/#CHANGE-2046
+project_id = "CSR"
+expand_opts = c("names", "fields", "changelog")
 max_results = 100
-start_at = 1
-total_results = 25
+nextPageToken = NULL
+total_results = 1
 progress = 0
+round = 1
 
 # Issues Loop ####
 while (total_results > progress) {
   req <- request(query_url) |>
     req_headers(Authorization = token_string) |>
     # configure project, max_results, and start_at
-    req_url_path_append(paste0(
-      project_id,
-      "&maxResults=",
-      max_results,
-      "&startAt=",
-      start_at
-    )) |>
+    req_url_query(
+      jql = I(paste0("project=", project_id)), # I wrapper skips auto-formatting of the extra "=" sign
+      expand = expand_opts,
+      maxResults = max_results,
+      fields = "*all",
+      # startAt = start_at, #deprecated for nextPageToken
+      nextPageToken = nextPageToken,
+      .multi = "comma" # control how vectors are appended, for expand_opts
+    ) |>
+    # req_proxy("142.34.229.249", 8080) |> # Use Server Proxy to connect
     req_perform()
 
   resp <- req |> resp_body_json()
 
   # Used to update total_results in while loop
-  total_results <- resp["total"][[1]]
+  nextPageToken <- resp["nextPageToken"][[1]]
+
+  # total results isn't always accurate, check that response has issues
+  if (length(resp$issues) == 0) {
+    break
+  }
+
+  if (is.null(nextPageToken)) {
+    progress <- 2
+  }
 
   names <- resp |>
     purrr::pluck("names") |>
@@ -175,11 +190,21 @@ while (total_results > progress) {
   #   # Shed what seems like excess for now
   #   -c()
   # )
-  if (start_at == 1) {
+  if (round == 1) {
     Issues <- issues
   } else {
     Issues <- full_join(Issues, issues)
   }
-  progress <- progress + max_results
-  start_at <- progress + 1
+
+  round <- 2
 }
+
+# Replace NA values with NaN, think this plays better with PBI
+Issues <- Issues %>%
+  replace_na(replace = list(TimeToCompletion = NaN))
+
+# Server Save
+# write.csv(Issues, "E:/Projects/PBI-Gateway/CSR_Issues.csv", row.names = FALSE)
+
+# Local Save
+write.csv(Issues, here::here("CSR_output.csv"))

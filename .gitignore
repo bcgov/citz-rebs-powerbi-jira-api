@@ -1,6 +1,9 @@
 # Folders to Ignore
 /PBI
 
+# Test files to Ignore
+*test_space.R
+
 # History files
 .Rhistory
 .Rapp.history
