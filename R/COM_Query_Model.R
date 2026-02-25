@@ -20,8 +20,7 @@ safe_hoist <- function(.data, .col, ...) {
   }
 }
 
-email <- read.csv("C:/Projects/credentials/email_address.csv") |> pull()
-api_key <- read.csv("C:/Projects/credentials/jira_api_token.csv") |> pull()
+
 token <- base64encode(charToRaw(paste0(email, ":", api_key)))
 token_string <- paste("Basic", token)
 
