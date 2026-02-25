@@ -1,3 +1,7 @@
+# For server logging
+# Begin timer
+# task_start <- Sys.time()
+
 # Load necessary packages
 library(base64enc, quietly = TRUE, warn.conflicts = FALSE)
 library(dplyr, quietly = TRUE, warn.conflicts = FALSE)
@@ -10,6 +14,9 @@ library(tidyr, quietly = TRUE, warn.conflicts = FALSE)
 
 # Server Run
 # source("E:/Projects/citz-rebs-jira-api/utilities.R")
+# source("E:/Projects/citz-rpd-utilities/event_logger.R")
+# api_id <- "Jira" # for event_logger
+# project_id <- "RBAS" # for event_logger
 # email <- "rpd.spbooking@gov.bc.ca"
 # api_key <- keyring::key_get(
 #   service = "JIRA_API",
